@@ -1,0 +1,267 @@
+---
+title: "Homework 8 (Time Series)"
+author: "Cininta Pertiwi"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+  html_notebook:
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+  github_document:
+    toc: no
+---
+
+**Data preparation of the Ozone dataset to assist in answering some of the questions in the homework:**
+
+```{r message=FALSE, warning=FALSE}
+# load packages
+library(tidyverse)
+library(data.table)
+library(dplyr)
+library(lubridate)
+library(readr)
+library(purrr)
+library(wql)
+library(Kendall)
+library(broom)
+```
+
+```{r message=FALSE, warning=FALSE, results='hide'}
+# load dataset
+setwd("ca_ozone")
+o3.filenames <- list.files(pattern = ".txt")
+o3.filelist <- lapply(o3.filenames, read_delim, delim = "|")
+names(o3.filelist) <- gsub(".txt","", o3.filenames)
+```
+
+```{r}
+# create tibbles from dataset
+daily.mean <- function(df) {
+  df %>% 
+    group_by(site = as.factor(site), date) %>% 
+    summarize(o3 = mean(obs, na.rm = TRUE)) %>% 
+    drop_na()  
+}
+d <- map(o3.filelist, daily.mean)
+```
+
+```{r message=FALSE, warning=FALSE}
+# wrangle to select just Santa Barbara Ozone
+filter.station <- function(df, x) {
+  df %>% 
+    filter(site == x)
+}
+sb.o3 <- map(d, filter.station, 2008)
+sb <- sb.o3 %>% 
+  bind_rows()
+```
+
+```{r}
+# turn Santa Barbara O3 data into time series with daily observations
+sb.ts <- ts(sb$o3, start = c(1980,1), frequency = 365.25)
+```
+
+```{r message=FALSE, warning=FALSE}
+# also generate time series for monthly observations
+# first wrangle into monthly median observations
+sb$mo <- as.factor(lubridate::month(sb$date))
+sb$yr <- year(sb$date)
+sb.mo <- sb %>%
+  select(-site, -date) %>% 
+  group_by(yr, mo) %>% 
+  summarize(o3 = median(o3))
+# then create time series for monthly observations
+sb.mo.ts <- ts(sb.mo$o3, start = c(1980, 1), frequency = 12)
+```
+
+
+## Time Series Analysis
+### <span style="color:red"># 1</span>
+#####<span style="color:red">What is the class of `Nile`? What is the time interval of the time series?</span>
+The class of `Nile` is "ts" which refers to a time series object.The time interval of the `Nile` time series is 1 year (annual values).
+
+## Reading in Time Series Data
+### <span style="color:red"># 2</span>
+#####<span style="color:red">`ts()` only handles regularly spaced time series data. How do we deal with irregularly spaced time series? Do some internet research and describe some options, as well as pitfalls or limitations.</span>
+Through searching the internet, I found the following packages in R that are able to work with irregularly spaced time series data:
+
+* `tseries` specifically the `irts` function ([source](http://ftp.auckland.ac.nz/software/CRAN/doc/packages/tseries.pdf))
+* `spacetime` specifically the `STTDF` class ([source](https://cran.r-project.org/web/packages/spacetime/spacetime.pdf))
+* `cts` ([source](https://cran.r-project.org/web/packages/cts/cts.pdf))
+
+The limitations of using the pacakges for irregular time intervals is that it somewhat depends on the purpose of creating the timestep. The `irst` function is used to create the time series but the use of it may be tied to the `irst` functions in the same package. The `STTDF` class is not a function and instead it gives the object the class of an irregular time series based on the rules of the package. There may be limitatios to how it can be used, analyzed, and modified. The `cts` package meanwhile is different than the other two mentioned. It is a package containing functions for specific examples of time series cases. The function in the package therefore are only applicable to these specific cases. Additonally, it focuses on using the time series to generate autoregressive models.
+
+## Autocorrelation
+### <span style="color:red"># 3</span>
+#####<span style="color:red">What is the approximate lag for the o3 at this site in Santa Barbara? Provide this in meaningful units.</span>
+Interpreting the ACF plot was a rather confusing learning experience for me. Initially, my interpretation of the given ACF plot is that the lag values on the x axis represent months. Therefore, the ACF plot indicates an approximate lag value of 1 month. With the highest correlation at lag 1 and 2, this may suggest that values of the current month is dependent on the values of the previous month and even from the past two months.
+
+However, I then did some internet search and now my interpretation of the ACF plot is to read the lag values as the index for year. I based this interpretation mainly from these articles:
+
+* Page 3 of [Basic time series with R](http://www.maths.manchester.ac.uk/~gb/R/Rtsbasic.pdf) by Georgi N. Boshnakov
+* This stackoverflow post: [Time Series Analysis in R : Frequency value in ts() function vs lag in acf plot](https://stackoverflow.com/questions/23982656/time-series-analysis-in-r-frequency-value-in-ts-function-vs-lag-in-acf-plot)
+* This tutorial [Time Series Analysis in R - Australia Beer Production]() by Edward Tsai
+
+In all these articles the data being used is similar to the Santa Barbara monthly data we are using. They all generate time series for monthly data using frequency of 12, just like the o3 data. This means that there is 12 observations in 1 unit time. In this case that unit time being 1 year. It is explained that for the ACF plot, R is able to make adjustments based on the frequency. Thus, the index value of the lag listed in the plot is for 1 unit time which is 1 year.
+
+Therefore, the reading of the approximate lag is yearly since the frequency of the time series is 12 for 12 months per 1 year. The ACF plot indicates that there is seasonality in the data with an approximate lag value of 1 year. The oscillation noticable in the plot indicates the seasonality while the ACF values that go beyond the dashed blue lines indicate that values correlate at that lag. Since the highest correlation values are shown at lags 1 and 2, this may indicate that values this year is dependent on values the year before and the year before that and so forth. Additionally, the values are also significant for quarter of a lag which may indicate that although there is higher influences from previous years, values at about three months prior also affects current values.
+
+I also tried to visually see if this was indeed the case. Below I generate 2 ACF plots: one is if the time series is generated with frequency of 12 (which is what our data is) and one if the time series was created with a frequency  of 1 (the time unit of the series is monthly instead of yearly).
+
+```{r}
+# ACF with frequency of 12 (our current data)
+acf(sb.mo.ts)
+```
+
+```{r}
+# now ACF with same data but the time series is with frequency of 1
+sb.mo.ts.fq1 <- ts(sb.mo$o3, start = c(1980, 1), frequency = 1)
+acf(sb.mo.ts.fq1)
+```
+
+Looking at both plots, they are essentially the same except for the x axis values. In the first plot the lag is in years (our current time series) while in the second plot the lag is in months. The correlation value at lag of 1 year in the top plot is the same as the correlation value at lag 12 months in the bottom plot.
+
+## Partial Autocorrelation
+### <span style="color:red"># 4</span>
+#####<span style="color:red">Interpret the plot. What does this tell us? Use internet research as appropriate.</span>
+The PACF plot shows a clearer gradual decline in the correlation values with time than in the ACF. What this tells us is that at some level the value at the current time may have a dependency on not only on the directly previous value at time - 1 but also values at time steps before that as well. This is because the declaine in the correlations occur somewhat gradually than immediately which could suggest that the values at the current time is not just influenced by the value directly before it.
+
+Sources from the internet that helped me in interpreting the plot:
+
+* This article: [Identifying the numbers of AR or MA terms in an ARIMA model](https://people.duke.edu/~rnau/411arim3.htm)
+* Tis tutorial: [A Complete Tutorial on Time Series Modeling in R](https://www.analyticsvidhya.com/blog/2015/12/complete-tutorial-time-series-modeling/)
+* This stackoverflow post: [ACF and PACF interpretation](https://stackoverflow.com/questions/43370262/acf-and-pacf-interpretation)
+
+## Modeling Our Time Series
+### <span style="color:red"># 5</span>
+#####<span style="color:red">Transform the monthly Santa Barbara o3 time series by calculating the natural log and plot the results. Which case (original or transformed) is best described by an additive model?</span>
+
+```{r}
+# add log normal values to monthly SB o3 data
+sb.mo.ln <- sb.mo %>%
+  mutate(ln.o3 = log(o3))
+sb.mo.ln
+```
+
+```{r}
+# generate and plot time series with natural log values
+sb.mo.ln.ts <- ts(sb.mo.ln$ln.o3, start = c(1980, 1), frequency = 12)
+```
+
+```{r}
+# compare original and transformed time series
+par(mfrow = c(2, 1))
+plot(sb.mo.ts)
+plot(sb.mo.ln.ts, col = "red")
+par(mfrow = c(1, 1))
+```
+
+By plotting both time series, original o3 (top) and transformed o3 (bottom), it does not seem that the transformation changes the plotting of the time series except for the Y axis values. In additional, I could do a regression to see if it may provide any noticable differences in the fluctuation of the two time series.
+
+```{r}
+# lm on original o3
+lm(sb$o3 ~ sb$date)
+```
+
+```{r}
+# lm on natural log o3
+lm(log(sb$o3) ~ sb$date)
+```
+The slope estimates for both regressions are very small but the original o3 values have a lower slope and thus closer to zero. Since additive models are more appropriate for time series with random fluctuations constant with time, this could mean that the closer to zero the slope is then the more constant the fluctuations are. If this is the case, I would say that an additive model is already appropriate with the original o3 values and the natural log transform is not necessary.
+
+## Decomposing a Time Series
+### <span style="color:red"># 6</span>
+#####<span style="color:red">What class is the resulting object from applying decompose()? What does it contain?</span>
+The class resulting from `decompose()` is `"decompose.ts"` which is in the form of a list of 6 elements: the initial time series, the trend component, the seasonal component, estimated seasonal figures, the remainder contribution, and the model type (additive or multiplication).
+
+## Seasonally Adjusting a Time Series
+### <span style="color:red"># 7</span>
+#####<span style="color:red">Assess the additive model performance. How well did it adjust for seasonality in Santa Barbara o3? Show your steps.</span>
+I tried using the `lowess()` smoothing lines to see if the additive model was able to adjust for seasonality.
+```{r}
+# --- (1) decompose time series using the additive model format
+sb.components <- decompose(sb.mo.ts, type = "additive")
+
+# --- (2) create time series adjusted for seasonality with the additive model
+sb.mo.add <- sb.mo.ts - sb.components$seasonal
+```
+
+```{r}
+# --- (3) plot both the original time series (black) with the adjusted time series (red)
+plot(sb.mo.ts)
+lines(sb.mo.add, col = "red")
+```
+
+The plot shows that the original time series differ from the adjusted time series.
+
+```{r}
+# --- (4) use lowess and visualize smoothing line on both time series
+par(mfrow = c(1, 2))
+plot(sb.mo.ts)
+lines(lowess(sb.mo.ts), col="blue", lwd = 3)
+plot(sb.mo.add, col = "red")
+lines(lowess(sb.mo.add), col="blue", lwd = 3)
+par(mfrow = c(1, 1))
+```
+
+The plot shows the original time series on the left and the adjusted time series on the right. Although subtle, the smoothing lines differ slightly for the two graphs. This difference is more noticable in the earlier years where the line in the adjusted series is flatter than in the original series. This shows that the additive model was able to, at some level, adjust for seasonality and thus the flatter smoothing line indicates the reduction in formation of local maxima an minima within the series.
+
+## Trend Testing: Seasonal Mann-Kendall
+### <span style="color:red"># 8</span>
+#####<span style="color:red">What can you conclude about the appropriateness of the Seasonal Mann-Kendall test for trend for this case?</span>
+Since the Seasonal Mann-Kendall test is not informative when different months have different trend value signs, the test may not be appropriate for the Santa Barbara monthly o3 dataset. The `seasonTrend` plot shows that there are months with both positive and negative trends thus having different signs in their trend values.
+
+## Visualizing Anomalies
+### <span style="color:red"># 9</span>
+#####<span style="color:red">What are the trends in monthly Ozone across California from 1980 - 2011? Compare trends between different air quality basins. Show your work and justify your statistical assumptions.</span>
+To see the trends in monthly O3 across California, the original dataset is grouped by month.
+```{r}
+# --- (1) create and visualize monthly data for o3 from all stations
+#         similar to the Santa Barbara monthly data, summarize each month by its median
+monthly <- d %>%
+  rbindlist() %>%
+  mutate(year = as.factor(lubridate::year(date))) %>%
+  mutate(month = as.factor(lubridate::month(date))) %>%
+  group_by(year, month) %>%
+  summarize(o3 = median(o3, na.rm = TRUE))
+ggplot(monthly, aes(x = month, y = o3)) + geom_boxplot()
+```
+
+The pattern for O3 across CA looks to be different than for Santa Barbara. This may be due each stations having varying trends in O3 concetration throughout the year.
+
+```{r}
+# --- (2) create and plot time series
+o3.mo.ts <- ts(monthly$o3, start = c(1980, 1), frequency = 12)
+plot.ts(o3.mo.ts)
+```
+
+```{r}
+# --- (3) do a seasonTrend plot to see if Seasonal Mann-Kendall test is applicable
+seasonTrend(o3.mo.ts, plot = TRUE, scales = "free")
+```
+
+Hmm, almost all months have positive except for July. However, the trend value although negative is close to zero and also not significant. Because of this, I will still try the Seasonal Mann-Kendall on the data after the Mann-Kendall test.
+
+```{r}
+# --- (4) Mann-Kendall test; use both MannKendall() and mannKen()
+
+o3.mk1 <- MannKendall(o3.mo.ts)
+summary(o3.mk1)
+
+o3.mk2 <- mannKen(o3.mo.ts, plot = TRUE)
+o3.mk2
+```
+Although slightly different, both tests gave values that are somewhat similar. The p-value is approximately 0.01 which I would say is significant. This indicates that a trend exists in the monthly O3 data across CA. Let's do the Seasonal Mann-Kendall to see if the trend is significant at all seasons.
+
+```{r}
+smk.o3 <- seaKen(o3.mo.ts)
+smk.o3
+```
+The p-values from the Seasonal Mann-Kendall test gives a very low p-value suggesting that the trend exists in all seasons thus there is a trend in the series. However, it is still important to note that I did the Seasonal Mann-Kendall test assuming that the negative trend for July, as seen in the `seasonTrend` plot is close enough to zero that it would not count as a negative value. That said, I would say that there is a trend in the series for monthly O3 across CA but not necessarily that the trend may or may not be different between months.
